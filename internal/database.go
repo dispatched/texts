@@ -990,6 +990,10 @@ func GetMessageMedia(userDB *sql.DB, messageID string) ([]byte, string, error) {
 	return mediaData, mediaType, nil
 }
 
+// ErrNoDateRange indicates the account has no messages yet, distinct from
+// an actual query failure
+var ErrNoDateRange = fmt.Errorf("no data available")
+
 func GetDateRange(userDB *sql.DB) (time.Time, time.Time, error) {
 	var minDate, maxDate int64
 
@@ -1002,7 +1006,7 @@ func GetDateRange(userDB *sql.DB) (time.Time, time.Time, error) {
 	}
 
 	if !min.Valid || !max.Valid {
-		return time.Time{}, time.Time{}, fmt.Errorf("no data available")
+		return time.Time{}, time.Time{}, ErrNoDateRange
 	}
 
 	minDate = min.Int64

@@ -125,8 +125,8 @@ function App() {
     try {
       const response = await axios.get(`${API_BASE}/daterange`)
       setDateRange({
-        min: new Date(response.data.min_date),
-        max: new Date(response.data.max_date)
+        min: response.data.min_date ? new Date(response.data.min_date) : null,
+        max: response.data.max_date ? new Date(response.data.max_date) : null
       })
     } catch (error) {
       console.error('Error fetching date range:', error)

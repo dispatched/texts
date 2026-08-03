@@ -404,6 +404,14 @@ func HandleDateRange(c echo.Context) error {
 	}
 
 	minDate, maxDate, err := GetDateRange(userDB)
+	if err == ErrNoDateRange {
+		// No messages imported yet is a normal state for a new account,
+		// not a server error - return empty bounds instead of a 500
+		return c.JSON(http.StatusOK, map[string]interface{}{
+			"min_date": nil,
+			"max_date": nil,
+		})
+	}
 	if err != nil {
 		slog.Error("Error getting date range", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
