@@ -31,8 +31,10 @@ function Login() {
           setOidcProviderName(response.data.oidc_provider_name || 'SSO')
         }
       })
-      .catch(() => {
+      .catch((err) => {
         // If the config endpoint is unavailable, leave registration visible
+        // and log why, since this otherwise fails silently
+        console.error('Failed to load /api/config:', err)
       })
   }, [])
 
