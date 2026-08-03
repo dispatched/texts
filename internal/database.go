@@ -1116,14 +1116,14 @@ func getSummaryStats(userDB *sql.DB, dateFilter string, args []interface{}, anal
 	query := `
 		SELECT
 			COUNT(*) as total,
-			SUM(CASE WHEN record_type = 1 THEN 1 ELSE 0 END) as sms_count,
-			SUM(CASE WHEN record_type = 2 THEN 1 ELSE 0 END) as mms_count,
-			SUM(CASE WHEN record_type = 3 THEN 1 ELSE 0 END) as call_count,
-			SUM(CASE WHEN record_type IN (1,2) AND type = 2 THEN 1 ELSE 0 END) as sent,
-			SUM(CASE WHEN record_type IN (1,2) AND type = 1 THEN 1 ELSE 0 END) as received,
-			SUM(CASE WHEN record_type = 3 AND type = 1 THEN 1 ELSE 0 END) as incoming_calls,
-			SUM(CASE WHEN record_type = 3 AND type = 2 THEN 1 ELSE 0 END) as outgoing_calls,
-			SUM(CASE WHEN record_type = 3 AND type = 3 THEN 1 ELSE 0 END) as missed_calls,
+			COALESCE(SUM(CASE WHEN record_type = 1 THEN 1 ELSE 0 END), 0) as sms_count,
+			COALESCE(SUM(CASE WHEN record_type = 2 THEN 1 ELSE 0 END), 0) as mms_count,
+			COALESCE(SUM(CASE WHEN record_type = 3 THEN 1 ELSE 0 END), 0) as call_count,
+			COALESCE(SUM(CASE WHEN record_type IN (1,2) AND type = 2 THEN 1 ELSE 0 END), 0) as sent,
+			COALESCE(SUM(CASE WHEN record_type IN (1,2) AND type = 1 THEN 1 ELSE 0 END), 0) as received,
+			COALESCE(SUM(CASE WHEN record_type = 3 AND type = 1 THEN 1 ELSE 0 END), 0) as incoming_calls,
+			COALESCE(SUM(CASE WHEN record_type = 3 AND type = 2 THEN 1 ELSE 0 END), 0) as outgoing_calls,
+			COALESCE(SUM(CASE WHEN record_type = 3 AND type = 3 THEN 1 ELSE 0 END), 0) as missed_calls,
 			COALESCE(SUM(CASE WHEN record_type = 3 THEN duration ELSE 0 END), 0) as total_duration,
 			COALESCE(AVG(CASE WHEN record_type IN (1,2) AND body IS NOT NULL AND body != '' THEN LENGTH(body) END), 0) as avg_length
 		FROM messages
