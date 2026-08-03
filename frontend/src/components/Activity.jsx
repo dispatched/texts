@@ -59,7 +59,6 @@ function Activity({ startDate, endDate }) {
   }
 
   const loadMore = useCallback(() => {
-    console.log('loadMore called:', { loadingMore, hasMore, offset })
     if (!loadingMore && hasMore) {
       const newOffset = offset + PAGE_SIZE
       setOffset(newOffset)
@@ -71,21 +70,12 @@ function Activity({ startDate, endDate }) {
   useEffect(() => {
     // Make sure both refs are available
     if (!scrollContainerRef.current || !observerTarget.current) {
-      console.log('Refs not ready:', { scroll: !!scrollContainerRef.current, target: !!observerTarget.current })
       return
     }
 
-    console.log('Setting up IntersectionObserver', { hasMore, loadingMore, activitiesCount: activities.length })
-
     const observer = new IntersectionObserver(
       (entries) => {
-        console.log('Observer callback fired', {
-          isIntersecting: entries[0].isIntersecting,
-          hasMore,
-          loadingMore
-        })
         if (entries[0].isIntersecting && hasMore && !loadingMore) {
-          console.log('Intersection detected, loading more...')
           loadMore()
         }
       },
@@ -299,21 +289,6 @@ function Activity({ startDate, endDate }) {
               const isGroupConversation = msg.addresses && msg.addresses.length > 1
               const isSent = msg.type === 2
               const showSenderLabel = isGroupConversation && !isSent
-
-              // Debug logging for ALL messages to understand what we're receiving
-              console.log('Message received:', {
-                id: msg.id,
-                addresses: msg.addresses,
-                addressesType: typeof msg.addresses,
-                addressesLength: msg.addresses?.length,
-                sender: msg.sender,
-                address: msg.address,
-                type: msg.type,
-                isSent,
-                isGroupConversation,
-                showSenderLabel,
-                body: msg.body?.substring(0, 30)
-              })
 
               return (
                 <div key={`msg-${msg.id}`} className="card mb-2 shadow-sm" style={{padding: '0.5rem'}}>

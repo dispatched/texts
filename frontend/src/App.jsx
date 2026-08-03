@@ -449,10 +449,6 @@ function App() {
       {showPasswordModal && (
         <ChangePasswordModal
           onClose={() => setShowPasswordModal(false)}
-          onSuccess={() => {
-            // Password changed successfully
-            console.log('Password changed successfully')
-          }}
         />
       )}
 

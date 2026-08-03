@@ -21,8 +21,6 @@ function PrintView() {
     const startDate = searchParams.get('start')
     const endDate = searchParams.get('end')
 
-    console.log('URL params:', { address, startDate, endDate })
-
     if (!address) {
       console.error('No address provided')
       return
@@ -39,27 +37,15 @@ function PrintView() {
       if (startDate) params.start = startDate
       if (endDate) params.end = endDate
 
-      console.log('Fetching conversation with params:', params)
       // Use /messages endpoint with type=conversation to get all types (SMS, MMS, calls)
       const response = await axios.get(`${API_BASE}/messages`, { params })
       const items = response.data || []
 
-      console.log('Received items:', items.length)
-      if (items.length > 0) {
-        console.log('First item:', items[0])
-        console.log('First item body:', items[0].body)
-        console.log('First item date:', items[0].date)
-        console.log('First item type:', items[0].type)
-      }
-
-      console.log('Setting messages state with items:', items)
       setMessages(items)
-      console.log('Messages state set')
 
       // Get contact name and subject from any item in the list
       const contactName = items.find(item => item.contact_name)?.contact_name
       const subject = items.find(item => item.subject)?.subject
-      console.log('Contact name:', contactName, 'Subject:', subject)
 
       setConversation({
         address,
@@ -73,7 +59,6 @@ function PrintView() {
         return msg.media_type
       }).length
       setTotalMedia(mediaCount)
-      console.log('Total media items:', mediaCount)
 
       setLoading(false)
 
@@ -230,23 +215,11 @@ function PrintView() {
   }
 
   const renderMessage = (item) => {
-    console.log('Rendering item:', {
-      itemType: item.type,
-      hasMessage: !!item.message,
-      fullItem: item
-    })
-
     // Check if this is a call at the Activity level
     if (item.type === 'call' && item.call) {
       // For calls in Activity items, the call data is nested in item.call
       const call = item.call
       const typeInfo = getCallTypeInfo(call.type)
-      console.log('Rendering call:', {
-        callId: call.id,
-        callType: call.type,
-        duration: call.duration,
-        typeInfo
-      })
 
       return (
         <div key={call.id} className="print-message print-call">
@@ -266,12 +239,6 @@ function PrintView() {
 
     // For messages, extract from nested message object
     const message = item.message || item
-    console.log('Rendering message:', {
-      messageId: message.id,
-      body: message.body,
-      hasBody: !!(message.body && message.body !== ''),
-      hasMedia: !!message.media_type
-    })
 
     // Regular message rendering
     const isSent = message.type === 2
@@ -293,8 +260,6 @@ function PrintView() {
                   <img
                     src={`${API_BASE}/media?id=${message.id}`}
                     alt="Message attachment"
-                    onLoad={() => console.log(`Image ${message.id} loaded`)}
-                    onError={(e) => console.log(`Image ${message.id} failed to load:`, e)}
                   />
                   {message.media_type === 'image/gif' && (
                     <div className="print-gif-overlay">
@@ -307,8 +272,6 @@ function PrintView() {
                 <div className="print-video-container">
                   <video
                     src={`${API_BASE}/media?id=${message.id}`}
-                    onLoadedData={() => console.log(`Video ${message.id} loaded`)}
-                    onError={(e) => console.log(`Video ${message.id} failed to load:`, e)}
                     preload="metadata"
                   />
                   <div className="print-video-overlay">
@@ -381,14 +344,8 @@ function PrintView() {
 
       <div className="print-messages">
         {(() => {
-          console.log('About to render messages. Count:', messages.length)
-          console.log('Messages array:', messages)
-          console.log('Is array?', Array.isArray(messages))
           return messages.length > 0 ? (
-            messages.map((msg, index) => {
-              console.log(`Message ${index}:`, msg)
-              return renderMessage(msg)
-            })
+            messages.map((msg) => renderMessage(msg))
           ) : (
             <p className="text-center text-muted">No messages to display</p>
           )

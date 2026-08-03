@@ -195,8 +195,6 @@ function MediaCarousel({ mediaItems, initialIndex, onClose, transcodeVideos = ne
               console.error('Video error code:', e.target.error?.code)
               console.error('Video error message:', e.target.error?.message)
             }}
-            onLoadStart={() => console.log('Video load started:', currentItem.id)}
-            onCanPlay={() => console.log('Video can play:', currentItem.id)}
           />
         ) : (
           <img
