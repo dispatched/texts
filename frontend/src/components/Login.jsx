@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
 import { useAuth } from '../contexts/AuthContext'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import ThemeToggle from './ThemeToggle'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8085/api'

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate, useLocation, Routes, Route } from 'react-router-dom'
+import { useNavigate, useLocation, Routes, Route } from 'react-router'
 import { Dropdown } from 'react-bootstrap'
 import axios from 'axios'
 import { useAuth } from './contexts/AuthContext'

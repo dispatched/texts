@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import { useTheme } from '../contexts/ThemeContext'
-import { useLocation } from 'react-router-dom'
+import { useLocation } from 'react-router'
 import axios from 'axios'
 import { format } from 'date-fns'
 import LazyMedia from './LazyMedia'

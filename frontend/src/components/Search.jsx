@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import { useEffect, useRef } from 'react'
 import axios from 'axios'
 import { format } from 'date-fns'
