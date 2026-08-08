@@ -124,7 +124,7 @@ function Upload({ onClose, onSuccess }) {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
-      timeout: 300000, // 5 minute timeout for file upload
+      timeout: 0, // No timeout; large backups can take a long time to transfer
       onUploadProgress: (progressEvent) => {
         // This tracks the HTTP upload progress (file transfer to disk)
         const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total)
