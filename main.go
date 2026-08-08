@@ -176,6 +176,9 @@ func main() {
 
 	// Start auto-import service
 	dataDir := dbPathPrefix + "/data"
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		logger.Error("Failed to create data directory", "path", dataDir, "error", err)
+	}
 	autoImportService := internal.NewAutoImportService(dataDir)
 	autoImportService.Start()
 	defer autoImportService.Stop()
