@@ -159,7 +159,11 @@ function Upload({ onClose, onSuccess }) {
       },
     })
 
-    const canStream = typeof Request !== 'undefined' && (() => {
+    // Streaming request bodies require a secure context (HTTPS or localhost) in
+    // Chrome/Edge; over plain HTTP on any other origin, fetch() will construct the
+    // Request without error but then reject the send with "Failed to fetch". Gate
+    // on window.isSecureContext so we fall back cleanly instead of failing at send time.
+    const canStream = typeof Request !== 'undefined' && window.isSecureContext && (() => {
       try {
         // Feature-detect streaming request bodies (Chrome/Edge). Safari/Firefox
         // currently don't support this and will throw or silently buffer.
