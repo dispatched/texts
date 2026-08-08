@@ -113,27 +113,95 @@ function Upload({ onClose, onSuccess }) {
   }
 
   const uploadSingleFile = async (file) => {
-    const formData = new FormData()
-    formData.append('file', file)
-
     setUploadProgress(0)
     setCurrentStep(1)
 
-    // Step 1: Upload file to server
-    const response = await axios.post(`${API_BASE}/upload`, formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-      timeout: 0, // No timeout; large backups can take a long time to transfer
-      onUploadProgress: (progressEvent) => {
-        // This tracks the HTTP upload progress (file transfer to disk)
-        const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total)
-        setUploadProgress(percentCompleted) // Show actual upload progress 0-100%
+    // Step 1: Upload file to server.
+    // We build the multipart body and stream it via fetch() instead of axios/XHR.
+    // XHR requires the browser to fully assemble the FormData body in memory before
+    // sending a single byte, which on a multi-GB file shows up as a long "pending"
+    // request with no upload progress. Streaming the file part directly avoids that
+    // staging pause; only the small text preamble/epilogue is buffered.
+    const boundary = `----sbvUpload${Date.now().toString(16)}`
+    const encoder = new TextEncoder()
+    const preamble = encoder.encode(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="file"; filename="${file.name.replace(/"/g, '%22')}"\r\n` +
+      `Content-Type: application/octet-stream\r\n\r\n`
+    )
+    const epilogue = encoder.encode(`\r\n--${boundary}--\r\n`)
+    const totalBytes = preamble.length + file.size + epilogue.length
+
+    let bytesSent = 0
+    const reportProgress = (chunkLength) => {
+      bytesSent += chunkLength
+      setUploadProgress(Math.min(Math.round((bytesSent / totalBytes) * 100), 100))
+    }
+
+    // Compose preamble + file (streamed straight from disk) + epilogue into one stream,
+    // reporting progress as each piece is actually read for send.
+    const combined = new ReadableStream({
+      async start(controller) {
+        controller.enqueue(preamble)
+        reportProgress(preamble.length)
+
+        const reader = file.stream().getReader()
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          controller.enqueue(value)
+          reportProgress(value.byteLength)
+        }
+
+        controller.enqueue(epilogue)
+        reportProgress(epilogue.length)
+        controller.close()
       },
     })
 
-    if (!response.data.success) {
-      throw new Error(response.data.error || 'Upload failed')
+    const canStream = typeof Request !== 'undefined' && (() => {
+      try {
+        // Feature-detect streaming request bodies (Chrome/Edge). Safari/Firefox
+        // currently don't support this and will throw or silently buffer.
+        return new Request('https://example.invalid', {
+          method: 'POST',
+          body: new ReadableStream(),
+          duplex: 'half',
+        }).headers !== undefined
+      } catch {
+        return false
+      }
+    })()
+
+    let res
+    if (canStream) {
+      res = await fetch(`${API_BASE}/upload`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        },
+        body: combined,
+        duplex: 'half',
+      })
+    } else {
+      // Fallback for browsers without streaming request body support.
+      // This still buffers in-memory (same limitation as before) but keeps
+      // uploads working everywhere.
+      const formData = new FormData()
+      formData.append('file', file)
+      res = await fetch(`${API_BASE}/upload`, {
+        method: 'POST',
+        credentials: 'include',
+        body: formData,
+      })
+      setUploadProgress(100)
+    }
+
+    const data = await res.json()
+
+    if (!res.ok || !data.success) {
+      throw new Error(data.error || 'Upload failed')
     }
 
     // File uploaded successfully, move to step 2
