@@ -39,6 +39,13 @@ function App() {
       message_limit: 100000
     }
   })
+  // Tracks whether fetchSettings() has resolved at least once (success or
+  // failure -- both paths call setSettings with a settled value). Used to
+  // hold off the initial conversations fetch until real settings are in
+  // hand, instead of firing once with the placeholder defaults and again
+  // moments later once fetchSettings() resolves and replaces the settings
+  // object -- see the conversations-fetch effect below.
+  const [settingsLoaded, setSettingsLoaded] = useState(false)
 
   // Mobile sidebar state
   const [showSidebar, setShowSidebar] = useState(true)
@@ -68,9 +75,13 @@ function App() {
   }, [])
 
   useEffect(() => {
-    // Fetch conversations after settings are loaded
+    // Wait for fetchSettings() to resolve at least once, so this doesn't
+    // fire once with placeholder defaults and again moments later with the
+    // real settings -- two redundant /api/conversations requests for every
+    // page load.
+    if (!settingsLoaded) return
     fetchConversations()
-  }, [startDate, endDate, settings])
+  }, [startDate, endDate, settings, settingsLoaded])
 
   const fetchVersion = async () => {
     try {
@@ -95,6 +106,8 @@ function App() {
           message_limit: 100000
         }
       })
+    } finally {
+      setSettingsLoaded(true)
     }
   }
 
@@ -105,17 +118,33 @@ function App() {
       const address = decodeURIComponent(match[1])
       // Find conversation by address
       const conversation = conversations.find(c => c.address === address)
+        || (conversations.length > 0 ? { address, contact_name: address, type: 'message' } : null)
+
       if (conversation) {
-        setSelectedConversation(conversation)
-      } else if (conversations.length > 0) {
-        // If conversation not found in list, create a minimal conversation object
-        setSelectedConversation({ address, contact_name: address, type: 'message' })
+        // conversations is a fresh array (and fresh objects within it) on
+        // every fetch, so re-finding the same conversation after a reload
+        // (e.g. after upload, or a date-range change) would otherwise hand
+        // back a new object reference every time even when nothing about
+        // this conversation actually changed. MessageThread treats any new
+        // reference as "conversation changed" and refetches its messages,
+        // so only update state here when the conversation actually differs
+        // -- using the functional updater form to compare against the
+        // current value without needing selectedConversation in the
+        // dependency array (which would cause this effect to re-run itself).
+        setSelectedConversation(prev => {
+          if (prev && prev.address === conversation.address
+            && prev.last_message === conversation.last_message
+            && prev.message_count === conversation.message_count) {
+            return prev
+          }
+          return conversation
+        })
       }
       // Hide sidebar on mobile when viewing a conversation (from direct link or navigation)
       setShowSidebar(false)
     } else {
       // Not viewing a specific conversation
-      setSelectedConversation(null)
+      setSelectedConversation(prev => (prev === null ? prev : null))
       // Show sidebar when navigating to any non-conversation view
       setShowSidebar(true)
     }
