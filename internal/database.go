@@ -22,6 +22,28 @@ var userDBsMutex sync.RWMutex
 // UseWALMode controls whether WAL journal mode is enabled for databases
 var UseWALMode bool
 
+// writeLocks serializes writers per database when not in WAL mode (keyed by
+// *sql.DB, one per user database plus the shared auth database). The
+// rollback journal only supports a single writer at a time; without this,
+// concurrent imports (or an import racing another write) can hand SQLite
+// overlapping writers and return "database is locked" once busy_timeout is
+// exhausted. WAL mode allows a writer alongside concurrent readers, so this
+// lock is a no-op there.
+var writeLocks sync.Map // map[*sql.DB]*sync.Mutex
+
+// LockForWrite acquires the per-database write lock when not using WAL mode
+// and returns the unlock function to defer. In WAL mode it's a no-op, since
+// WAL already allows a single writer to proceed alongside concurrent readers.
+func LockForWrite(database *sql.DB) func() {
+	if UseWALMode {
+		return func() {}
+	}
+	lockIface, _ := writeLocks.LoadOrStore(database, &sync.Mutex{})
+	lock := lockIface.(*sync.Mutex)
+	lock.Lock()
+	return lock.Unlock
+}
+
 // truncateString truncates a string to maxLen characters for logging
 func truncateString(s string, maxLen int) string {
 	if len(s) <= maxLen {
@@ -67,12 +89,21 @@ func InitDB(filepath string) error {
 		return fmt.Errorf("failed to set busy timeout: %w", err)
 	}
 
-	// Enable WAL mode if requested (better for concurrent reads during writes)
 	if UseWALMode {
+		// WAL allows concurrent readers alongside a writer, so the default connection pool is fine.
 		_, err = db.Exec("PRAGMA journal_mode=WAL;")
 		if err != nil {
 			return fmt.Errorf("failed to enable WAL mode: %w", err)
 		}
+	} else {
+		// Explicitly switch back to the rollback journal so an existing WAL-mode
+		// database file (and its -wal/-shm sidecars) gets converted on startup.
+		_, err = db.Exec("PRAGMA journal_mode=DELETE;")
+		if err != nil {
+			return fmt.Errorf("failed to set journal mode: %w", err)
+		}
+		// Concurrent readers are still fine under the rollback journal; writers
+		// are serialized via LockForWrite instead of capping the connection pool.
 	}
 
 	createTableSQL := `
@@ -176,12 +207,23 @@ func InitUserDB(userID string, filepath string) error {
 		return fmt.Errorf("failed to set busy timeout: %w", err)
 	}
 
-	// Enable WAL mode if requested (better for concurrent reads during writes)
 	if UseWALMode {
+		// WAL allows concurrent readers alongside a writer, so the default connection pool is fine.
 		_, err = userDB.Exec("PRAGMA journal_mode=WAL;")
 		if err != nil {
 			return fmt.Errorf("failed to enable WAL mode: %w", err)
 		}
+	} else {
+		// Explicitly switch back to the rollback journal so an existing WAL-mode
+		// database file (and its -wal/-shm sidecars) gets converted on startup.
+		_, err = userDB.Exec("PRAGMA journal_mode=DELETE;")
+		if err != nil {
+			return fmt.Errorf("failed to set journal mode: %w", err)
+		}
+		// The rollback journal only supports a single writer at a time; without this,
+		// database/sql's connection pool can hand out a second connection that
+		// immediately deadlocks against the first ("database is locked").
+		userDB.SetMaxOpenConns(1)
 	}
 
 	createTableSQL := `

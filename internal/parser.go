@@ -791,6 +791,12 @@ func ProcessUploadedFile(userID string, username string, filePath string) {
 // ParseSMSBackupStreaming parses SMS backup file with streaming to reduce memory usage
 // Each message is inserted immediately and memory is freed aggressively
 func ParseSMSBackupStreaming(userDB *sql.DB, r io.Reader, batchSize int) (int, int, error) {
+	// Serialize writers against this user's database when not in WAL mode (no-op
+	// in WAL mode). Held for the whole import so concurrent imports for the same
+	// user queue up instead of racing SQLite's single-writer rollback journal.
+	unlock := LockForWrite(userDB)
+	defer unlock()
+
 	// Initialize progress tracking
 	uploadProgressLock.Lock()
 	uploadProgress = &UploadProgress{

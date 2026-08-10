@@ -31,12 +31,25 @@ func InitAuthDB(filepath string) error {
 		return fmt.Errorf("failed to set busy timeout: %w", err)
 	}
 
-	// Enable WAL mode if requested (better for concurrent reads during writes)
 	if UseWALMode {
+		// WAL allows concurrent readers alongside a writer, so the default connection pool is fine.
 		_, err = authDB.Exec("PRAGMA journal_mode=WAL;")
 		if err != nil {
 			return fmt.Errorf("failed to enable WAL mode: %w", err)
 		}
+	} else {
+		// Explicitly switch back to the rollback journal so an existing WAL-mode
+		// database file (and its -wal/-shm sidecars) gets converted on startup.
+		_, err = authDB.Exec("PRAGMA journal_mode=DELETE;")
+		if err != nil {
+			return fmt.Errorf("failed to set journal mode: %w", err)
+		}
+		// Auth DB writes are small and infrequent (user/session/settings rows), so
+		// capping the pool outright is simpler here than per-call-site locking;
+		// busy_timeout absorbs the rare overlap. The per-user message DB, which
+		// large imports write to for extended periods, uses LockForWrite instead
+		// so reads there aren't blocked behind an in-progress import.
+		authDB.SetMaxOpenConns(1)
 	}
 
 	createTableSQL := `
