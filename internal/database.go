@@ -501,8 +501,12 @@ func InsertCallLogBatch(userDB *sql.DB, calls []CallLog) error {
 }
 
 func GetConversations(userDB *sql.DB, startDate, endDate *time.Time) ([]Conversation, error) {
-	// CTE approach: find the latest row per address in one pass, then join for aggregates.
-	// This avoids two correlated subqueries that each re-scan all rows for every address.
+	// Find the latest row per address via a correlated subquery against
+	// idx_address_date, rather than joining a second CTE that re-scans the
+	// whole table. EXPLAIN QUERY PLAN confirms this drives the subquery as an
+	// indexed SEARCH (address=? AND date=?) instead of a second full SCAN of
+	// messages -- meaningful on large per-user databases, especially over
+	// network-backed storage where a second full-table scan is expensive.
 	dateFilter := "1=1"
 	args := []interface{}{}
 	if startDate != nil {
@@ -513,7 +517,7 @@ func GetConversations(userDB *sql.DB, startDate, endDate *time.Time) ([]Conversa
 		dateFilter += " AND date <= ?"
 		args = append(args, endDate.Unix())
 	}
-	// args are used twice (once in each CTE reference), so duplicate them
+	// args are used twice: once for the agg CTE, once for the correlated subquery
 	args = append(args, args...)
 
 	query := `
@@ -528,30 +532,29 @@ func GetConversations(userDB *sql.DB, startDate, endDate *time.Time) ([]Conversa
 			FROM messages
 			WHERE ` + dateFilter + `
 			GROUP BY address
-		),
-		latest AS (
-			SELECT m.address, m.record_type, m.type, m.body
-			FROM messages m
-			INNER JOIN agg ON m.address = agg.address AND m.date = agg.last_date
-			WHERE ` + dateFilter + `
 		)
 		SELECT
 			agg.address,
 			agg.contact_name,
 			COALESCE(agg.subject, '') AS subject,
-			CASE
-				WHEN latest.record_type = 3 AND latest.type = 1 THEN 'Incoming call'
-				WHEN latest.record_type = 3 AND latest.type = 2 THEN 'Outgoing call'
-				WHEN latest.record_type = 3 AND latest.type = 3 THEN 'Missed call'
-				WHEN latest.record_type = 3 AND latest.type = 4 THEN 'Voicemail'
-				WHEN latest.record_type = 3 AND latest.type = 5 THEN 'Rejected call'
-				WHEN latest.record_type = 3 AND latest.type = 6 THEN 'Refused call'
-				ELSE COALESCE(latest.body, '')
-			END AS last_message,
+			(
+				SELECT
+					CASE
+						WHEN m.record_type = 3 AND m.type = 1 THEN 'Incoming call'
+						WHEN m.record_type = 3 AND m.type = 2 THEN 'Outgoing call'
+						WHEN m.record_type = 3 AND m.type = 3 THEN 'Missed call'
+						WHEN m.record_type = 3 AND m.type = 4 THEN 'Voicemail'
+						WHEN m.record_type = 3 AND m.type = 5 THEN 'Rejected call'
+						WHEN m.record_type = 3 AND m.type = 6 THEN 'Refused call'
+						ELSE COALESCE(m.body, '')
+					END
+				FROM messages m INDEXED BY idx_address_date
+				WHERE m.address = agg.address AND m.date = agg.last_date
+				LIMIT 1
+			) AS last_message,
 			agg.last_date,
 			agg.activity_count
 		FROM agg
-		LEFT JOIN latest ON latest.address = agg.address
 		ORDER BY agg.last_date DESC
 	`
 
