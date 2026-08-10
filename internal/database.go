@@ -19,6 +19,16 @@ var db *sql.DB
 var userDBs = make(map[string]*sql.DB)
 var userDBsMutex sync.RWMutex
 
+// userDBInitLocks serializes first-time initialization per user ID, so
+// concurrent requests for a not-yet-cached user database don't all call
+// InitUserDB at once. Without this, multiple sql.Open calls against the same
+// file race to set journal_mode/busy_timeout and one loses with "database is
+// locked" -- normally a tight enough race to rarely hit on local disk, but
+// NFS's slower lock round-trip widens the window enough to hit it reliably
+// (e.g. a page load firing several API calls that all need the same user's
+// DB on first login).
+var userDBInitLocks sync.Map // map[string]*sync.Mutex
+
 // UseWALMode controls whether WAL journal mode is enabled for databases
 var UseWALMode bool
 
@@ -319,22 +329,38 @@ func GetUserDB(userID string, username string) (*sql.DB, error) {
 	userDBsMutex.RUnlock()
 
 	if !exists {
-		// Database not in cache, try to open or create it
-		dbPathPrefix := os.Getenv("DB_PATH_PREFIX")
-		if dbPathPrefix == "" {
-			dbPathPrefix = "."
-		}
-		// Use UUID as database filename instead of sanitized username
-		filepath := fmt.Sprintf("%s/sbv_%s.db", dbPathPrefix, userID)
+		// Serialize first-time initialization per user so concurrent requests
+		// (e.g. several API calls firing on first page load) don't race each
+		// other into InitUserDB -- see userDBInitLocks comment.
+		lockIface, _ := userDBInitLocks.LoadOrStore(userID, &sync.Mutex{})
+		initLock := lockIface.(*sync.Mutex)
+		initLock.Lock()
+		defer initLock.Unlock()
 
-		// InitUserDB will create the database if it doesn't exist
-		if err := InitUserDB(userID, filepath); err != nil {
-			return nil, fmt.Errorf("failed to initialize user database: %w", err)
-		}
-
+		// Re-check now that we hold the lock: another goroutine may have
+		// already finished initializing this user's DB while we were waiting.
 		userDBsMutex.RLock()
-		userDB = userDBs[userID]
+		userDB, exists = userDBs[userID]
 		userDBsMutex.RUnlock()
+
+		if !exists {
+			// Database not in cache, try to open or create it
+			dbPathPrefix := os.Getenv("DB_PATH_PREFIX")
+			if dbPathPrefix == "" {
+				dbPathPrefix = "."
+			}
+			// Use UUID as database filename instead of sanitized username
+			filepath := fmt.Sprintf("%s/sbv_%s.db", dbPathPrefix, userID)
+
+			// InitUserDB will create the database if it doesn't exist
+			if err := InitUserDB(userID, filepath); err != nil {
+				return nil, fmt.Errorf("failed to initialize user database: %w", err)
+			}
+
+			userDBsMutex.RLock()
+			userDB = userDBs[userID]
+			userDBsMutex.RUnlock()
+		}
 	}
 
 	return userDB, nil
