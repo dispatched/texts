@@ -42,11 +42,32 @@ func main() {
 	}))
 	slog.SetDefault(logger)
 
-	// Initialize authentication database
 	dbPathPrefix := os.Getenv("DB_PATH_PREFIX")
 	if dbPathPrefix == "" {
 		dbPathPrefix = "."
 	}
+
+	// Redirect os.TempDir() (honors TMPDIR) to the data volume, before
+	// anything in the standard library or its dependencies has a chance to
+	// use the default (the container's own, often small, root filesystem).
+	// The main culprit is net/http's multipart form parser: for uploads
+	// larger than the in-memory threshold it spills the overflow to
+	// os.TempDir() internally, before our own upload-handling code ever
+	// runs -- entirely uncontrolled by DB_PATH_PREFIX otherwise. A large
+	// backup upload could fill the container's root filesystem even though
+	// the data volume (where we explicitly stage uploads ourselves too) has
+	// plenty of room.
+	tmpDir := filepath.Join(dbPathPrefix, "tmp")
+	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+		logger.Error("Failed to create temp directory on data volume", "path", tmpDir, "error", err)
+		os.Exit(1)
+	}
+	if err := os.Setenv("TMPDIR", tmpDir); err != nil {
+		logger.Error("Failed to set TMPDIR", "error", err)
+		os.Exit(1)
+	}
+
+	// Initialize authentication database
 	authDBPath := dbPathPrefix + "/sbv.db"
 
 	err := internal.InitAuthDB(authDBPath)
