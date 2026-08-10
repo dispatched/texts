@@ -132,10 +132,44 @@ function Upload({ onClose, onSuccess }) {
     const epilogue = encoder.encode(`\r\n--${boundary}--\r\n`)
     const totalBytes = preamble.length + file.size + epilogue.length
 
-    let bytesSent = 0
+    // Reading the file from local disk is typically much faster than the
+    // request actually being sent over the network -- fetch() drains a
+    // ReadableStream request body into its own internal buffer as fast as
+    // the source can produce chunks, without exposing real wire-send
+    // backpressure back to page JS. So "bytes read and enqueued" alone
+    // reaches 100% almost instantly while the network transfer is still far
+    // behind (this is what was happening before).
+    //
+    // To approximate real progress without that signal, track a rolling
+    // throughput estimate (bytes enqueued per elapsed second) and report the
+    // percentage from *elapsed time × observed rate* rather than from raw
+    // bytes-enqueued. Progress is also capped short of 100% until fetch()
+    // actually resolves (server has fully received the request), so the bar
+    // can't falsely claim completion before the upload is actually done.
+    const UPLOAD_DISPLAY_CAP = 99
+    const startTime = performance.now()
+    let bytesEnqueued = 0
+    let displayedProgress = 0
+
+    const updateDisplayedProgress = () => {
+      const elapsedSeconds = (performance.now() - startTime) / 1000
+      if (elapsedSeconds <= 0) return
+      const rate = bytesEnqueued / elapsedSeconds // bytes/sec observed so far
+      // Project remaining time at the current rate; this naturally slows
+      // down (rather than jumping) once local reads finish and bytesEnqueued
+      // stops growing, since elapsed time keeps advancing while bytes don't.
+      const estimatedTotalSeconds = rate > 0 ? totalBytes / rate : 0
+      const estimatedPercent = estimatedTotalSeconds > 0
+        ? (elapsedSeconds / estimatedTotalSeconds) * 100
+        : 0
+      // Never let the displayed value go backwards or exceed the cap.
+      displayedProgress = Math.min(UPLOAD_DISPLAY_CAP, Math.max(displayedProgress, Math.round(estimatedPercent)))
+      setUploadProgress(displayedProgress)
+    }
+
     const reportProgress = (chunkLength) => {
-      bytesSent += chunkLength
-      setUploadProgress(Math.min(Math.round((bytesSent / totalBytes) * 100), 100))
+      bytesEnqueued += chunkLength
+      updateDisplayedProgress()
     }
 
     // Compose preamble + file (streamed straight from disk) + epilogue into one stream,
@@ -179,15 +213,29 @@ function Upload({ onClose, onSuccess }) {
 
     let res
     if (canStream) {
-      res = await fetch(`${API_BASE}/upload`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': `multipart/form-data; boundary=${boundary}`,
-        },
-        body: combined,
-        duplex: 'half',
-      })
+      // Keep the estimate advancing (based on elapsed time) even after local
+      // reads finish and stop producing reportProgress calls -- otherwise the
+      // bar would freeze at whatever percent it reached when the disk read
+      // completed, which is exactly the "looks done but isn't" problem. Only
+      // meaningful for the streaming path; the buffered fallback below
+      // already jumps straight to 100% once the browser has the full body.
+      const progressTicker = setInterval(updateDisplayedProgress, 250)
+      try {
+        res = await fetch(`${API_BASE}/upload`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          },
+          body: combined,
+          duplex: 'half',
+        })
+      } finally {
+        clearInterval(progressTicker)
+      }
+      // fetch() only resolves once the server has fully received the
+      // request, so this is the first point we can honestly report 100%.
+      setUploadProgress(100)
     } else {
       // Fallback for browsers without streaming request body support.
       // This still buffers in-memory (same limitation as before) but keeps
