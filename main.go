@@ -8,6 +8,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -27,8 +28,13 @@ func main() {
 	journalMode := flag.Bool("journal", false, "Use rollback journal mode instead of WAL (for network filesystems)")
 	flag.Parse()
 
-	// Use WAL mode by default, unless -journal flag is set
+	// Use WAL mode by default, unless disabled via the -journal flag or the
+	// SQLITE_MODE env var (useful for network filesystems, which don't
+	// support WAL). SQLITE_MODE=journal disables WAL.
 	internal.UseWALMode = !*journalMode
+	if mode := os.Getenv("SQLITE_MODE"); mode != "" {
+		internal.UseWALMode = !strings.EqualFold(mode, "journal")
+	}
 
 	// Initialize slog logger
 	logger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{

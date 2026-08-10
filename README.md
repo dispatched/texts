@@ -64,6 +64,7 @@ services:
 - `PPROF_ENABLED` - Set to `true` to enable the Go pprof profiling server on `127.0.0.1:6060` (default: disabled)
 - `DISABLE_REGISTRATION` - Set to `true` to prevent new user sign-ups (default: registration open). Useful after you've created your own account.
 - `SECURE_COOKIES` - Set to `true` to always mark the session cookie `Secure` (HTTPS only). The cookie is also marked `Secure` automatically when the request arrives over HTTPS, including via a reverse proxy that sets `X-Forwarded-Proto`.
+- `SQLITE_MODE` - Set to `journal` to use SQLite's rollback journal instead of WAL mode (default: `wal`). WAL performs better for concurrent access, but doesn't work reliably on network filesystems (NFS, SMB, etc.) — use `journal` in that case. Equivalent to the `-journal` CLI flag; this env var takes precedence if both are set.
 
 ### OIDC Single Sign-On
 
