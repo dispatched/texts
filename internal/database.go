@@ -15,6 +15,14 @@ import (
 
 var db *sql.DB
 
+// dbExecer is satisfied by both *sql.DB and *sql.Tx, letting InsertMessage/
+// InsertCallLog run either as their own autocommit statement or as part of
+// a caller-managed transaction (see ParseSMSBackupStreaming, which batches
+// many inserts per commit instead of one commit per row).
+type dbExecer interface {
+	Exec(query string, args ...interface{}) (sql.Result, error)
+}
+
 // userDBs stores per-user database connections (keyed by user ID)
 var userDBs = make(map[string]*sql.DB)
 var userDBsMutex sync.RWMutex
@@ -366,7 +374,7 @@ func GetUserDB(userID string, username string) (*sql.DB, error) {
 	return userDB, nil
 }
 
-func InsertMessage(userDB *sql.DB, msg *Message) error {
+func InsertMessage(userDB dbExecer, msg *Message) error {
 	// Convert addresses slice to JSON string
 	var addressesJSON string
 	if len(msg.Addresses) > 0 {
@@ -431,7 +439,7 @@ func InsertMessage(userDB *sql.DB, msg *Message) error {
 	return nil
 }
 
-func InsertCallLog(userDB *sql.DB, call *CallLog) error {
+func InsertCallLog(userDB dbExecer, call *CallLog) error {
 	query := `
 		INSERT INTO messages (record_type, address, type, date, duration, presentation, subscription_id, contact_name)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)

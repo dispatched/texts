@@ -770,8 +770,10 @@ func ProcessUploadedFile(userID string, username string, filePath string) {
 	}
 	defer file.Close()
 
-	// Process with streaming parser (batch size 1 for minimal memory)
-	messageCount, callCount, err := ParseSMSBackupStreaming(userDB, file, 1) // Insert immediately, no batching
+	// Process with streaming parser. batchSize only controls how many rows
+	// share one commit -- rows are still inserted and their data freed one at
+	// a time as decoded, so this doesn't affect peak memory usage.
+	messageCount, callCount, err := ParseSMSBackupStreaming(userDB, file, defaultImportBatchSize)
 	if err != nil {
 		slog.Error("Error processing file", "error", err)
 		SetUploadProgress(0, 0, "error")
@@ -790,7 +792,25 @@ func ProcessUploadedFile(userID string, username string, filePath string) {
 
 // ParseSMSBackupStreaming parses SMS backup file with streaming to reduce memory usage
 // Each message is inserted immediately and memory is freed aggressively
+// defaultImportBatchSize is used when callers pass batchSize <= 0.
+const defaultImportBatchSize = 200
+
+// ParseSMSBackupStreaming parses an SMS Backup & Restore XML file and inserts
+// rows as it goes, committing every batchSize rows instead of autocommitting
+// each one individually. Each commit does a real fsync-equivalent flush of
+// the journal/database file; on network-backed storage (NFS) that flush is a
+// full round trip, so committing every single row makes network latency the
+// dominant cost of import -- observed as low tens of messages/sec regardless
+// of how fast decoding itself is. Batching cuts the number of commits by
+// ~batchSize. Keep this modest rather than huge: a mid-import failure only
+// loses the rows in the currently-open (uncommitted) batch -- they're safely
+// re-importable on retry either way, since INSERT ... ON CONFLICT DO NOTHING
+// makes re-running the same file idempotent, but a smaller batch bounds how
+// much re-decoding work a failure near the end of a large import wastes.
 func ParseSMSBackupStreaming(userDB *sql.DB, r io.Reader, batchSize int) (int, int, error) {
+	if batchSize <= 0 {
+		batchSize = defaultImportBatchSize
+	}
 	// Serialize writers against this user's database when not in WAL mode (no-op
 	// in WAL mode). Held for the whole import so concurrent imports for the same
 	// user queue up instead of racing SQLite's single-writer rollback journal.
@@ -811,6 +831,59 @@ func ParseSMSBackupStreaming(userDB *sql.DB, r io.Reader, batchSize int) (int, i
 
 	// Track total count from root element if available
 	var totalCount int
+
+	// Batches inserts into transactions of importBatchSize rows instead of
+	// autocommitting each one individually. tx is nil when no transaction is
+	// currently open (lazily started on the first row after each commit).
+	var tx *sql.Tx
+	var rowsInBatch int
+
+	// currentExecer returns the target for the next insert: the open
+	// transaction if one exists, opening a new one lazily on first use.
+	currentExecer := func() (dbExecer, error) {
+		if tx == nil {
+			var err error
+			tx, err = userDB.Begin()
+			if err != nil {
+				return nil, err
+			}
+			rowsInBatch = 0
+		}
+		return tx, nil
+	}
+
+	// commitIfBatchFull commits and clears the open transaction once
+	// batchSize rows have been added to it.
+	commitIfBatchFull := func() error {
+		rowsInBatch++
+		if rowsInBatch >= batchSize {
+			err := tx.Commit()
+			tx = nil
+			rowsInBatch = 0
+			return err
+		}
+		return nil
+	}
+
+	// commitPending flushes any partially-filled batch. Called on normal
+	// completion and on error, so nothing successfully inserted is left
+	// uncommitted.
+	commitPending := func() error {
+		if tx == nil {
+			return nil
+		}
+		err := tx.Commit()
+		tx = nil
+		rowsInBatch = 0
+		return err
+	}
+	// Roll back cleanly if we return early due to a decode error; a no-op
+	// once commitPending has already committed and cleared tx.
+	defer func() {
+		if tx != nil {
+			tx.Rollback()
+		}
+	}()
 
 	for {
 		token, err := decoder.Token()
@@ -853,13 +926,21 @@ func ParseSMSBackupStreaming(userDB *sql.DB, r io.Reader, batchSize int) (int, i
 					continue
 				}
 
-				// Insert immediately - no batching
-				err = InsertMessage(userDB, &msg)
+				execer, err := currentExecer()
+				if err != nil {
+					SetUploadProgress(0, 0, "error")
+					return messageCount, callCount, fmt.Errorf("failed to begin batch: %w", err)
+				}
+				err = InsertMessage(execer, &msg)
 				if err != nil {
 					slog.Error("Error inserting message", "error", err)
 				} else {
 					messageCount++
 					UpdateMessageProgress(messageCount)
+				}
+				if err := commitIfBatchFull(); err != nil {
+					SetUploadProgress(0, 0, "error")
+					return messageCount, callCount, fmt.Errorf("failed to commit batch: %w", err)
 				}
 
 				// Force garbage collection every 1000 messages to keep memory low
@@ -888,13 +969,21 @@ func ParseSMSBackupStreaming(userDB *sql.DB, r io.Reader, batchSize int) (int, i
 					continue
 				}
 
-				// Insert immediately - no batching
-				err = InsertMessage(userDB, &msg)
+				execer, err := currentExecer()
+				if err != nil {
+					SetUploadProgress(0, 0, "error")
+					return messageCount, callCount, fmt.Errorf("failed to begin batch: %w", err)
+				}
+				err = InsertMessage(execer, &msg)
 				if err != nil {
 					slog.Error("Error inserting message", "error", err)
 				} else {
 					messageCount++
 					UpdateMessageProgress(messageCount)
+				}
+				if err := commitIfBatchFull(); err != nil {
+					SetUploadProgress(0, 0, "error")
+					return messageCount, callCount, fmt.Errorf("failed to commit batch: %w", err)
 				}
 
 				// Clear the message data immediately after insert
@@ -922,8 +1011,12 @@ func ParseSMSBackupStreaming(userDB *sql.DB, r io.Reader, batchSize int) (int, i
 					continue
 				}
 
-				// Insert immediately - no batching
-				err = InsertCallLog(userDB, &callLog)
+				execer, err := currentExecer()
+				if err != nil {
+					SetUploadProgress(0, 0, "error")
+					return messageCount, callCount, fmt.Errorf("failed to begin batch: %w", err)
+				}
+				err = InsertCallLog(execer, &callLog)
 				if err != nil {
 					slog.Error("Error inserting call log", "error", err)
 				} else {
@@ -935,8 +1028,18 @@ func ParseSMSBackupStreaming(userDB *sql.DB, r io.Reader, batchSize int) (int, i
 					uploadProgress.mu.Unlock()
 					uploadProgressLock.Unlock()
 				}
+				if err := commitIfBatchFull(); err != nil {
+					SetUploadProgress(0, 0, "error")
+					return messageCount, callCount, fmt.Errorf("failed to commit batch: %w", err)
+				}
 			}
 		}
+	}
+
+	// Flush any partially-filled final batch.
+	if err := commitPending(); err != nil {
+		SetUploadProgress(0, 0, "error")
+		return messageCount, callCount, fmt.Errorf("failed to commit final batch: %w", err)
 	}
 
 	// Final garbage collection
