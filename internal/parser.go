@@ -702,9 +702,20 @@ func ClearUploadProgress() {
 
 // SaveUploadedFile saves the uploaded file to a temporary location
 func SaveUploadedFile(file io.Reader, filename string) (string, error) {
-	// Create temp directory if it doesn't exist
-	tempDir := os.TempDir()
-	uploadDir := filepath.Join(tempDir, "sbv-uploads")
+	// Stage the upload under DB_PATH_PREFIX (the same mounted data volume the
+	// databases live on) rather than the OS temp directory. os.TempDir()
+	// resolves to /tmp, which is the container's own (often small) root
+	// filesystem -- large backups can exhaust it even when the data volume
+	// has plenty of room, and it's unrelated storage from the user's
+	// perspective. Using the same volume also means the temp file and the
+	// destination database are on the same filesystem, avoiding a
+	// cross-filesystem copy if this ever needs to be moved rather than
+	// streamed.
+	dbPathPrefix := os.Getenv("DB_PATH_PREFIX")
+	if dbPathPrefix == "" {
+		dbPathPrefix = "."
+	}
+	uploadDir := filepath.Join(dbPathPrefix, "sbv-uploads")
 	err := os.MkdirAll(uploadDir, 0755)
 	if err != nil {
 		return "", fmt.Errorf("failed to create upload directory: %v", err)
