@@ -566,6 +566,10 @@ func HandleExportMedia(c echo.Context) error {
 	c.Response().Header().Set(echo.HeaderContentType, "application/zip")
 	c.Response().Header().Set(echo.HeaderContentDisposition, fmt.Sprintf(`attachment; filename="%s"`, filename))
 	c.Response().WriteHeader(http.StatusOK)
+	// Flush immediately so the client sees the response headers (and starts
+	// recognizing this as a download) right away, rather than waiting for
+	// the first batch of entries to accumulate.
+	c.Response().Flush()
 
 	zw := zip.NewWriter(c.Response())
 	defer zw.Close()
@@ -604,12 +608,17 @@ func HandleExportMedia(c echo.Context) error {
 			Modified: date,
 		})
 		if err != nil {
-			slog.Error("Error creating zip entry", "error", err, "name", entryName)
-			continue
+			// Once a write to the response fails (client disconnected,
+			// broken pipe, etc.), every subsequent entry will fail the
+			// same way -- there's no client left to receive them. Stop
+			// instead of burning CPU and DB reads churning through the
+			// rest of the export for nobody.
+			slog.Error("Error creating zip entry, aborting export", "error", err, "name", entryName, "files_written", written)
+			return nil
 		}
 		if _, err := w.Write(mediaData); err != nil {
-			slog.Error("Error writing zip entry", "error", err, "name", entryName)
-			continue
+			slog.Error("Error writing zip entry, aborting export", "error", err, "name", entryName, "files_written", written)
+			return nil
 		}
 
 		written++

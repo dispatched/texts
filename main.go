@@ -113,7 +113,23 @@ func main() {
 	// Middleware
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
-	e.Use(middleware.GzipWithConfig(middleware.GzipConfig{Level: 5}))
+	e.Use(middleware.GzipWithConfig(middleware.GzipConfig{
+		Level: 5,
+		// The media export streams a zip whose entries are already stored
+		// uncompressed originals (zip.Store, since the media is typically
+		// already compressed) directly onto the response as they're read
+		// from the DB, one row at a time, so the whole thing stays memory-
+		// flat regardless of export size. Passing that through gzip on top
+		// would just burn CPU re-compressing already-compressed bytes, and
+		// -- more importantly -- gzip.Writer holds data in its internal
+		// DEFLATE state until enough accumulates or Flush()/Close() is
+		// called, which delays the first bytes reaching the browser long
+		// enough that Chrome doesn't recognize the response as a download
+		// yet if the connection drops in that window.
+		Skipper: func(c echo.Context) bool {
+			return c.Path() == "/api/export/media"
+		},
+	}))
 
 	// Use custom CORS middleware that properly handles credentials
 	e.Use(internal.CustomCORSMiddleware())
