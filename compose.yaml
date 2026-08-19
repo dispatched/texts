@@ -17,7 +17,12 @@ services:
       - PGID=1000
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8081/api/health"]
+      # Note: --spider makes wget send a HEAD request. /api/health is only
+      # registered for GET, and Echo's router falls through to the
+      # authenticated catch-all (401) for the unmatched HEAD method rather
+      # than 404ing, so --spider always reports unhealthy. Use a real GET
+      # (discarding the body) instead.
+      test: ["CMD", "wget", "--quiet", "--tries=1", "-O", "/dev/null", "http://localhost:8081/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3

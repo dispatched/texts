@@ -116,139 +116,61 @@ function Upload({ onClose, onSuccess }) {
     setUploadProgress(0)
     setCurrentStep(1)
 
-    // Step 1: Upload file to server.
-    // We build the multipart body and stream it via fetch() instead of axios/XHR.
-    // XHR requires the browser to fully assemble the FormData body in memory before
-    // sending a single byte, which on a multi-GB file shows up as a long "pending"
-    // request with no upload progress. Streaming the file part directly avoids that
-    // staging pause; only the small text preamble/epilogue is buffered.
-    const boundary = `----sbvUpload${Date.now().toString(16)}`
-    const encoder = new TextEncoder()
-    const preamble = encoder.encode(
-      `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="file"; filename="${file.name.replace(/"/g, '%22')}"\r\n` +
-      `Content-Type: application/octet-stream\r\n\r\n`
-    )
-    const epilogue = encoder.encode(`\r\n--${boundary}--\r\n`)
-    const totalBytes = preamble.length + file.size + epilogue.length
-
-    // Reading the file from local disk is typically much faster than the
-    // request actually being sent over the network -- fetch() drains a
-    // ReadableStream request body into its own internal buffer as fast as
-    // the source can produce chunks, without exposing real wire-send
-    // backpressure back to page JS. So "bytes read and enqueued" alone
-    // reaches 100% almost instantly while the network transfer is still far
-    // behind (this is what was happening before).
+    // Step 1: Upload file to server via XHR with a plain FormData body.
     //
-    // To approximate real progress without that signal, track a rolling
-    // throughput estimate (bytes enqueued per elapsed second) and report the
-    // percentage from *elapsed time × observed rate* rather than from raw
-    // bytes-enqueued. Progress is also capped short of 100% until fetch()
-    // actually resolves (server has fully received the request), so the bar
-    // can't falsely claim completion before the upload is actually done.
-    const UPLOAD_DISPLAY_CAP = 99
-    const startTime = performance.now()
-    let bytesEnqueued = 0
-    let displayedProgress = 0
+    // A previous version of this code tried to stream the request body via
+    // fetch()'s ReadableStream support, to avoid buffering the whole file in
+    // browser memory. That approach was fragile in practice:
+    //   - Safari's feature-detection for streaming bodies didn't actually
+    //     throw at construction time, so canStream evaluated true even
+    //     though Safari can't send a streamed request -- it only failed
+    //     later, at send time, with "ReadableStream uploading is not
+    //     supported".
+    //   - Chrome hit "Failed to fetch" on the same path for reasons that
+    //     were never fully pinned down.
+    //
+    // FormData with a File/Blob doesn't have this problem: browsers stream
+    // the file from disk at the network layer without duplicating multiple
+    // GB of it in JS-visible memory -- the same problem this whole feature
+    // was built to avoid -- it's just not exposed as a JS ReadableStream.
+    // XHR (rather than fetch) is used here specifically because it exposes
+    // real upload progress via `xhr.upload.onprogress`, which fetch does
+    // not provide for request bodies.
+    const formData = new FormData()
+    formData.append('file', file)
 
-    const updateDisplayedProgress = () => {
-      const elapsedSeconds = (performance.now() - startTime) / 1000
-      if (elapsedSeconds <= 0) return
-      const rate = bytesEnqueued / elapsedSeconds // bytes/sec observed so far
-      // Project remaining time at the current rate; this naturally slows
-      // down (rather than jumping) once local reads finish and bytesEnqueued
-      // stops growing, since elapsed time keeps advancing while bytes don't.
-      const estimatedTotalSeconds = rate > 0 ? totalBytes / rate : 0
-      const estimatedPercent = estimatedTotalSeconds > 0
-        ? (elapsedSeconds / estimatedTotalSeconds) * 100
-        : 0
-      // Never let the displayed value go backwards or exceed the cap.
-      displayedProgress = Math.min(UPLOAD_DISPLAY_CAP, Math.max(displayedProgress, Math.round(estimatedPercent)))
-      setUploadProgress(displayedProgress)
-    }
+    const res = await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', `${API_BASE}/upload`)
+      xhr.withCredentials = true
 
-    const reportProgress = (chunkLength) => {
-      bytesEnqueued += chunkLength
-      updateDisplayedProgress()
-    }
-
-    // Compose preamble + file (streamed straight from disk) + epilogue into one stream,
-    // reporting progress as each piece is actually read for send.
-    const combined = new ReadableStream({
-      async start(controller) {
-        controller.enqueue(preamble)
-        reportProgress(preamble.length)
-
-        const reader = file.stream().getReader()
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          controller.enqueue(value)
-          reportProgress(value.byteLength)
-        }
-
-        controller.enqueue(epilogue)
-        reportProgress(epilogue.length)
-        controller.close()
-      },
-    })
-
-    // Streaming request bodies require a secure context (HTTPS or localhost) in
-    // Chrome/Edge; over plain HTTP on any other origin, fetch() will construct the
-    // Request without error but then reject the send with "Failed to fetch". Gate
-    // on window.isSecureContext so we fall back cleanly instead of failing at send time.
-    const canStream = typeof Request !== 'undefined' && window.isSecureContext && (() => {
-      try {
-        // Feature-detect streaming request bodies (Chrome/Edge). Safari/Firefox
-        // currently don't support this and will throw or silently buffer.
-        return new Request('https://example.invalid', {
-          method: 'POST',
-          body: new ReadableStream(),
-          duplex: 'half',
-        }).headers !== undefined
-      } catch {
-        return false
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return
+        // Cap short of 100% until the server has actually finished
+        // processing the response, so the bar can't claim completion
+        // before the upload is truly done.
+        const percent = Math.min(99, Math.round((e.loaded / e.total) * 100))
+        setUploadProgress(percent)
       }
-    })()
 
-    let res
-    if (canStream) {
-      // Keep the estimate advancing (based on elapsed time) even after local
-      // reads finish and stop producing reportProgress calls -- otherwise the
-      // bar would freeze at whatever percent it reached when the disk read
-      // completed, which is exactly the "looks done but isn't" problem. Only
-      // meaningful for the streaming path; the buffered fallback below
-      // already jumps straight to 100% once the browser has the full body.
-      const progressTicker = setInterval(updateDisplayedProgress, 250)
-      try {
-        res = await fetch(`${API_BASE}/upload`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            'Content-Type': `multipart/form-data; boundary=${boundary}`,
+      xhr.onload = () => {
+        setUploadProgress(100)
+        resolve({
+          ok: xhr.status >= 200 && xhr.status < 300,
+          json: async () => {
+            try {
+              return JSON.parse(xhr.responseText)
+            } catch {
+              return {}
+            }
           },
-          body: combined,
-          duplex: 'half',
         })
-      } finally {
-        clearInterval(progressTicker)
       }
-      // fetch() only resolves once the server has fully received the
-      // request, so this is the first point we can honestly report 100%.
-      setUploadProgress(100)
-    } else {
-      // Fallback for browsers without streaming request body support.
-      // This still buffers in-memory (same limitation as before) but keeps
-      // uploads working everywhere.
-      const formData = new FormData()
-      formData.append('file', file)
-      res = await fetch(`${API_BASE}/upload`, {
-        method: 'POST',
-        credentials: 'include',
-        body: formData,
-      })
-      setUploadProgress(100)
-    }
+      xhr.onerror = () => reject(new Error('Upload failed'))
+      xhr.onabort = () => reject(new Error('Upload aborted'))
+
+      xhr.send(formData)
+    })
 
     const data = await res.json()
 
