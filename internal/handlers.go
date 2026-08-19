@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"archive/zip"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -534,6 +535,96 @@ func HandleMedia(c echo.Context) error {
 	// No range request - serve full content
 	c.Response().Header().Set("Content-Length", fmt.Sprintf("%d", len(media)))
 	return c.Blob(http.StatusOK, contentType, media)
+}
+
+// HandleExportMedia streams every image/video/audio attachment in the
+// user's account into a single zip file. Rows are read one at a time and
+// written straight into the zip on the HTTP response - nothing is buffered
+// server-side, so the export's memory footprint stays flat regardless of
+// how much media there is. Files are stored (not deflated), since media is
+// already compressed, and kept as the original bytes (no HEIC/video/audio
+// conversion), matching what's actually in the backup.
+func HandleExportMedia(c echo.Context) error {
+	userDB, err := getUserDB(c)
+	if err != nil {
+		slog.Error("Error getting user database", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to get user database",
+		})
+	}
+
+	rows, err := GetAllMediaForExport(userDB)
+	if err != nil {
+		slog.Error("Error querying media for export", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to query media",
+		})
+	}
+	defer rows.Close()
+
+	filename := fmt.Sprintf("sbv-media-export-%s.zip", time.Now().Format("2006-01-02"))
+	c.Response().Header().Set(echo.HeaderContentType, "application/zip")
+	c.Response().Header().Set(echo.HeaderContentDisposition, fmt.Sprintf(`attachment; filename="%s"`, filename))
+	c.Response().WriteHeader(http.StatusOK)
+
+	zw := zip.NewWriter(c.Response())
+	defer zw.Close()
+
+	written := 0
+	for rows.Next() {
+		var id int64
+		var address, contactName, mediaType string
+		var dateUnix int64
+		var mediaData []byte
+
+		if err := rows.Scan(&id, &address, &contactName, &dateUnix, &mediaType, &mediaData); err != nil {
+			slog.Error("Error scanning media row for export", "error", err)
+			continue
+		}
+		if len(mediaData) == 0 {
+			continue
+		}
+
+		date := time.Unix(dateUnix, 0)
+		folder := sanitizeFilename(contactName)
+		if folder == "" {
+			folder = sanitizeFilename(address)
+		}
+		if folder == "" {
+			folder = "unknown"
+		}
+
+		// id is unique across the whole table, so this name is guaranteed
+		// unique within its folder without any extra dedup bookkeeping.
+		entryName := fmt.Sprintf("%s/%s_%d%s", folder, date.Format("2006-01-02"), id, mediaExtension(mediaType))
+
+		w, err := zw.CreateHeader(&zip.FileHeader{
+			Name:     entryName,
+			Method:   zip.Store,
+			Modified: date,
+		})
+		if err != nil {
+			slog.Error("Error creating zip entry", "error", err, "name", entryName)
+			continue
+		}
+		if _, err := w.Write(mediaData); err != nil {
+			slog.Error("Error writing zip entry", "error", err, "name", entryName)
+			continue
+		}
+
+		written++
+		if written%25 == 0 {
+			zw.Flush()
+			c.Response().Flush()
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		slog.Error("Error iterating media rows for export", "error", err)
+	}
+
+	slog.Info("Media export complete", "files_written", written)
+	return nil
 }
 
 func HandleSearch(c echo.Context) error {

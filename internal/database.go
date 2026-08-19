@@ -1004,6 +1004,27 @@ func GetMediaByAddress(userDB *sql.DB, address string, startDate, endDate *time.
 	return mediaItems, nil
 }
 
+// GetAllMediaForExport returns a row cursor over every image/video/audio
+// attachment in the user's database, for streaming into a bulk zip export.
+// Unlike GetMessages/GetActivity it deliberately does NOT exclude
+// media_data - the raw bytes are the whole point here. Callers must close
+// the returned rows.
+func GetAllMediaForExport(userDB *sql.DB) (*sql.Rows, error) {
+	query := `
+		SELECT id, address, COALESCE(contact_name, '') as contact_name, date,
+		       media_type, media_data
+		FROM messages
+		WHERE record_type IN (1, 2)
+		AND media_type IS NOT NULL
+		AND media_type != ''
+		AND media_data IS NOT NULL
+		AND length(media_data) > 0
+		AND (media_type LIKE 'image/%' OR media_type LIKE 'video/%' OR media_type LIKE 'audio/%')
+		ORDER BY address, date
+	`
+	return userDB.Query(query)
+}
+
 func GetMessageMedia(userDB *sql.DB, messageID string) ([]byte, string, error) {
 	query := `
 		SELECT COALESCE(media_data, ''), COALESCE(media_type, '')

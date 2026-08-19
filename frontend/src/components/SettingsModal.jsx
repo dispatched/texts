@@ -142,6 +142,19 @@ function SettingsModal({ show, onClose, onSettingsUpdated }) {
                     Maximum number of messages shown when opening a conversation.
                   </div>
                 </div>
+
+                <hr className="my-4" />
+
+                <h6 className="mb-3">Export</h6>
+                <a
+                  href={`${API_BASE}/export/media`}
+                  className="btn btn-outline-primary w-100"
+                >
+                  Download All Media (.zip)
+                </a>
+                <div className="form-text">
+                  Downloads every photo, video, and audio attachment across all conversations as a single zip file, organized into a folder per contact.
+                </div>
               </>
             )}
           </div>

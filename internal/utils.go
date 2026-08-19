@@ -2,6 +2,80 @@ package internal
 
 import "strings"
 
+// mediaExtension maps a stored MIME/content type to a file extension for
+// exported media. Falls back to deriving one from the MIME subtype, then to
+// ".bin", so an unrecognized type never blocks the export.
+func mediaExtension(contentType string) string {
+	switch strings.ToLower(strings.TrimSpace(contentType)) {
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	case "image/heic", "image/heif":
+		return ".heic"
+	case "image/bmp":
+		return ".bmp"
+	case "video/mp4":
+		return ".mp4"
+	case "video/3gpp", "video/3gpp2":
+		return ".3gp"
+	case "video/quicktime":
+		return ".mov"
+	case "video/webm":
+		return ".webm"
+	case "audio/mp4", "audio/m4a", "audio/x-m4a":
+		return ".m4a"
+	case "audio/amr", "audio/amr-wb":
+		return ".amr"
+	case "audio/mpeg", "audio/mp3":
+		return ".mp3"
+	case "audio/ogg":
+		return ".ogg"
+	case "audio/wav", "audio/x-wav":
+		return ".wav"
+	default:
+		sub := contentType
+		if idx := strings.LastIndex(contentType, "/"); idx != -1 && idx+1 < len(contentType) {
+			sub = contentType[idx+1:]
+		}
+		sub = strings.SplitN(sub, ";", 2)[0] // strip any "; charset=..." suffix
+		sub = strings.TrimPrefix(sub, "x-")
+		sub = strings.TrimPrefix(sub, "vnd.")
+		sub = strings.TrimSpace(sub)
+		if sub != "" {
+			return "." + sub
+		}
+		return ".bin"
+	}
+}
+
+// sanitizeFilename strips characters that are unsafe in zip entry paths /
+// filesystem names, so contact names and phone numbers can double as folder
+// names in the media export.
+func sanitizeFilename(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer(
+		"/", "-",
+		"\\", "-",
+		":", "-",
+		"*", "",
+		"?", "",
+		"\"", "",
+		"<", "",
+		">", "",
+		"|", "",
+	)
+	name = strings.Trim(replacer.Replace(name), " .")
+	return name
+}
+
 // normalizePhoneNumber removes all non-numeric characters except leading +
 // and standardizes US phone numbers to include the +1 country code
 // This prevents duplicate conversations due to different phone number formatting

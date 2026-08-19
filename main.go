@@ -164,6 +164,7 @@ func main() {
 	protected.GET("/progress", internal.HandleProgress)
 	protected.GET("/media", internal.HandleMedia)
 	protected.GET("/media-items", internal.HandleMediaItems)
+	protected.GET("/export/media", internal.HandleExportMedia)
 	protected.GET("/search", internal.HandleSearch)
 	protected.GET("/settings", internal.HandleGetSettings)
 	protected.PUT("/settings", internal.HandleUpdateSettings)
