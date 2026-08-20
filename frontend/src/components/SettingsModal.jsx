@@ -146,14 +146,22 @@ function SettingsModal({ show, onClose, onSettingsUpdated }) {
                 <hr className="my-4" />
 
                 <h6 className="mb-3">Export</h6>
-                <a
-                  href={`${API_BASE}/export/media`}
-                  className="btn btn-outline-primary w-100"
-                >
-                  Download All Media (.zip)
-                </a>
+                <div className="d-grid gap-2">
+                  <a
+                    href={`${API_BASE}/export/media`}
+                    className="btn btn-outline-primary"
+                  >
+                    Download Media by Conversation (.zip)
+                  </a>
+                  <a
+                    href={`${API_BASE}/export/media?view=all`}
+                    className="btn btn-outline-primary"
+                  >
+                    Download All Media Together (.zip)
+                  </a>
+                </div>
                 <div className="form-text">
-                  Downloads every photo, video, and audio attachment across all conversations as a single zip file, organized into a folder per contact.
+                  Choose the existing contact folders or one combined view containing every photo, video, and audio attachment.
                 </div>
               </>
             )}

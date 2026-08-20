@@ -573,6 +573,7 @@ func HandleExportMedia(c echo.Context) error {
 
 	zw := zip.NewWriter(c.Response())
 	defer zw.Close()
+	flatView := c.QueryParam("view") == "all"
 
 	written := 0
 	for rows.Next() {
@@ -601,6 +602,9 @@ func HandleExportMedia(c echo.Context) error {
 		// id is unique across the whole table, so this name is guaranteed
 		// unique within its folder without any extra dedup bookkeeping.
 		entryName := fmt.Sprintf("%s/%s_%d%s", folder, date.Format("2006-01-02"), id, mediaExtension(mediaType))
+		if flatView {
+			entryName = fmt.Sprintf("%s_%s_%d%s", folder, date.Format("2006-01-02"), id, mediaExtension(mediaType))
+		}
 
 		w, err := zw.CreateHeader(&zip.FileHeader{
 			Name:     entryName,
@@ -632,7 +636,7 @@ func HandleExportMedia(c echo.Context) error {
 		slog.Error("Error iterating media rows for export", "error", err)
 	}
 
-	slog.Info("Media export complete", "files_written", written)
+	slog.Info("Media export complete", "files_written", written, "view", c.QueryParam("view"))
 	return nil
 }
 
