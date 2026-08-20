@@ -169,6 +169,36 @@ func TestHandleConversations(t *testing.T) {
 	}
 }
 
+func TestHandleClearImportedData(t *testing.T) {
+	_, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	userDB, err := GetUserDB(testUserID, "testuser")
+	if err != nil {
+		t.Fatalf("Failed to get user database: %v", err)
+	}
+	before, err := CountActivityByAddress(userDB, "", nil, nil)
+	if err != nil || before == 0 {
+		t.Fatalf("Expected imported data before clear, count=%d error=%v", before, err)
+	}
+
+	c, rec := setupTestContext(http.MethodDelete, "/api/data", "")
+	if err := HandleClearImportedData(c); err != nil {
+		t.Fatalf("HandleClearImportedData failed: %v", err)
+	}
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("Expected status 204, got %d", rec.Code)
+	}
+
+	after, err := CountActivityByAddress(userDB, "", nil, nil)
+	if err != nil {
+		t.Fatalf("Failed to count imported data after clear: %v", err)
+	}
+	if after != 0 {
+		t.Fatalf("Expected no imported data after clear, got %d rows", after)
+	}
+}
+
 func TestHandleConversationsWithDateRange(t *testing.T) {
 	_, cleanup := setupTestDB(t)
 	defer cleanup()

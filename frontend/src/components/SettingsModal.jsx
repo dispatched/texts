@@ -21,6 +21,7 @@ function SettingsModal({ show, onClose, onSettingsUpdated }) {
   })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+	const [clearing, setClearing] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -79,6 +80,24 @@ function SettingsModal({ show, onClose, onSettingsUpdated }) {
         message_limit: parseInt(e.target.value, 10)
       }
     })
+  }
+
+  const handleClearImportedData = async () => {
+	const confirmed = window.confirm(
+	  'Permanently delete all imported messages, calls, and media? Your account and settings will be kept.'
+	)
+	if (!confirmed) return
+
+	try {
+	  setClearing(true)
+	  setError('')
+	  await axios.delete(`${API_BASE}/data`)
+	  window.location.reload()
+	} catch (err) {
+	  console.error('Failed to clear imported data:', err)
+	  setError('Failed to clear imported data')
+	  setClearing(false)
+	}
   }
 
   if (!show) return null
@@ -163,6 +182,21 @@ function SettingsModal({ show, onClose, onSettingsUpdated }) {
                 <div className="form-text">
                   Choose the existing contact folders or one combined view containing every photo, video, and audio attachment.
                 </div>
+
+				<hr className="my-4" />
+
+				<h6 className="mb-3 text-danger">Imported Data</h6>
+				<button
+				  type="button"
+				  className="btn btn-outline-danger w-100"
+				  onClick={handleClearImportedData}
+				  disabled={clearing}
+				>
+				  {clearing ? 'Clearing Imported Data...' : 'Clear Imported Backup'}
+				</button>
+				<div className="form-text">
+				  Permanently removes imported messages, calls, and media while keeping your account and settings.
+				</div>
               </>
             )}
           </div>
@@ -171,7 +205,7 @@ function SettingsModal({ show, onClose, onSettingsUpdated }) {
               type="button"
               className="btn btn-secondary"
               onClick={onClose}
-              disabled={saving}
+			  disabled={saving || clearing}
             >
               Cancel
             </button>
@@ -179,7 +213,7 @@ function SettingsModal({ show, onClose, onSettingsUpdated }) {
               type="button"
               className="btn btn-primary"
               onClick={handleSave}
-              disabled={loading || saving}
+			  disabled={loading || saving || clearing}
             >
               {saving ? (
                 <>

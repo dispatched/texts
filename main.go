@@ -181,6 +181,7 @@ func main() {
 	protected.GET("/media", internal.HandleMedia)
 	protected.GET("/media-items", internal.HandleMediaItems)
 	protected.GET("/export/media", internal.HandleExportMedia)
+	protected.DELETE("/data", internal.HandleClearImportedData)
 	protected.GET("/search", internal.HandleSearch)
 	protected.GET("/settings", internal.HandleGetSettings)
 	protected.PUT("/settings", internal.HandleUpdateSettings)

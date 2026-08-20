@@ -640,6 +640,28 @@ func HandleExportMedia(c echo.Context) error {
 	return nil
 }
 
+// HandleClearImportedData clears only the signed-in user's imported backup.
+// Authentication data and user settings live outside this database.
+func HandleClearImportedData(c echo.Context) error {
+	userDB, err := getUserDB(c)
+	if err != nil {
+		slog.Error("Error getting user database", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to get user database",
+		})
+	}
+
+	if err := ClearImportedData(userDB); err != nil {
+		slog.Error("Error clearing imported data", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to clear imported data",
+		})
+	}
+
+	slog.Info("Imported data cleared", "user_id", c.Get("user_id"))
+	return c.NoContent(http.StatusNoContent)
+}
+
 func HandleSearch(c echo.Context) error {
 	userDB, err := getUserDB(c)
 	if err != nil {

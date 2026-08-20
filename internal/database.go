@@ -1025,6 +1025,27 @@ func GetAllMediaForExport(userDB *sql.DB) (*sql.Rows, error) {
 	return userDB.Query(query)
 }
 
+// ClearImportedData removes all imported messages, calls, and media from a
+// user's database while leaving their account and settings intact.
+func ClearImportedData(userDB *sql.DB) error {
+	unlock := LockForWrite(userDB)
+	defer unlock()
+
+	tx, err := userDB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM messages"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM sqlite_sequence WHERE name = 'messages'"); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func GetMessageMedia(userDB *sql.DB, messageID string) ([]byte, string, error) {
 	query := `
 		SELECT COALESCE(media_data, ''), COALESCE(media_type, '')
